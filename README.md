@@ -1,18 +1,36 @@
 # LocGENStudio
 
-LocGENStudio is a local generative studio for Windows 11. The canvas is a graph. Inference runs on this PC, on the GPU that `pythonembedded` can see. Weights stay in one models folder. The studio sends filenames, not the files.
+**0.8.7.** A local generative studio for Windows 11.
 
-Nothing in a run is uploaded. The preview in a browser cannot see your GPU. Real images appear only after the starter is listening on this machine.
+You wire a graph on the canvas. The engine on this PC loads the weights you already have and samples on the GPU that `pythonembedded` can see. Diffusion models, LoRAs, text encoders, VAEs, and checkpoints stay in one models folder, in the same layout a local engine expects. The studio sends filenames and sampler settings. It does not upload the files. A browser preview cannot see the GPU. A real image shows up only after the starter is listening on this machine.
+
+Built-in graphs cover Flux, Flux Schnell, Flux 2 Klein, Krea 2, Qwen Image 2.1, Z-Image, SDXL, SD 1.5, Wan 2.2, LTX 2.5, and MiniMax H3. Open **Graphs** and start from one of those instead of wiring the loaders by hand.
+
+The Windows package for this version is [v0.8.7](https://github.com/vinodkvijayan/LocGENStudio/releases/tag/v0.8.7).
 
 ## Screenshots
 
-The canvas is a wired graph. Run posts that graph to the engine on this PC.
+**Flux portrait.** CLIP-L, T5-XXL, a LoRA, and a 1024 latent.
 
 ![Flux portrait graph](docs/screenshots/canvas.png)
 
-![Built-in graphs, including Krea 2, Qwen Image 2.1, Z-Image, Wan 2.2, LTX 2.5, and MiniMax H3](docs/screenshots/graphs.png)
+**Graphs.** Each family has a starting graph.
+
+![Graph menu with Flux, Krea 2, Qwen Image 2.1, Z-Image, Wan 2.2, LTX 2.5, and MiniMax H3](docs/screenshots/graphs.png)
+
+**Krea 2.** One Qwen3-VL encoder, the Krea diffusion file, and the Qwen image VAE.
 
 ![Krea 2 graph](docs/screenshots/krea.png)
+
+**Wan 2.2.** A video latent: 832×480, 49 frames, UMT5, and the Wan VAE.
+
+![Wan 2.2 graph](docs/screenshots/wan.png)
+
+**Library.** Point the studio at a models root, then place a weight on the canvas.
+
+![Model library beside the canvas](docs/screenshots/library.png)
+
+**Windows.** The models root, the engine URL, and the starter.
 
 ![Windows setup](docs/screenshots/windows.png)
 

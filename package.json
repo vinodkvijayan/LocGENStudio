@@ -1,6 +1,6 @@
 {
   "name": "locgenstudio",
-  "version": "0.8.632",
+  "version": "0.8.7",
   "private": true,
   "sideEffects": false,
   "type": "module",
