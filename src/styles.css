@@ -1,0 +1,189 @@
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "Figtree", ui-sans-serif, system-ui, sans-serif;
+  --font-display: "Bricolage Grotesque", ui-sans-serif, system-ui, sans-serif;
+  --color-bg: #0e1211;
+  --color-surface: #161c1a;
+  --color-surface-2: #1e2623;
+  --color-line: #2c3834;
+  --color-fg: #e8f0eb;
+  --color-muted: #8d9c95;
+  --color-signal: #9ecbb6;
+  --color-accent: #e7f1eb;
+  --color-accent-ink: #101614;
+  --radius-card: 1rem;
+}
+
+@layer base {
+  html {
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  html,
+  body {
+    height: 100%;
+    background: var(--color-bg);
+    color: var(--color-fg);
+  }
+
+  button:not(:disabled),
+  [role="button"]:not(:disabled) {
+    cursor: pointer;
+  }
+
+  ::selection {
+    background: color-mix(in oklab, var(--color-signal) 42%, transparent);
+    color: var(--color-fg);
+  }
+
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: var(--color-line) transparent;
+  }
+}
+
+.canvas-dots {
+  background-color: var(--color-bg);
+  background-image: radial-gradient(
+    circle,
+    color-mix(in oklab, var(--color-signal) 28%, transparent) 1px,
+    transparent 1px
+  );
+  background-size: 24px 24px;
+}
+
+.studio-node {
+  box-shadow: 0 16px 36px rgb(0 0 0 / 0.32);
+}
+
+.studio-node[data-selected="true"] {
+  border-color: var(--color-signal);
+}
+
+.field {
+  width: 100%;
+  border-radius: 0.65rem;
+  border: 1px solid var(--color-line);
+  background: var(--color-bg);
+  color: var(--color-fg);
+  padding: 0.55rem 0.75rem;
+  font-size: 1rem;
+  line-height: 1.4;
+  outline: none;
+}
+
+.field:focus {
+  border-color: var(--color-signal);
+}
+
+.docs-body {
+  max-width: 42rem;
+  color: var(--color-fg);
+  font-size: 0.95rem;
+  line-height: 1.6;
+}
+
+.docs-body h1,
+.docs-body h2,
+.docs-body h3 {
+  font-family: var(--font-display);
+  font-weight: 500;
+  letter-spacing: -0.02em;
+  text-wrap: balance;
+}
+
+.docs-body h1 {
+  font-size: 2.4rem;
+  line-height: 1.1;
+}
+
+.docs-body h2 {
+  margin-top: 2rem;
+  font-size: 1.6rem;
+}
+
+.docs-body h3 {
+  margin-top: 1.4rem;
+  font-size: 1.2rem;
+}
+
+.docs-body p,
+.docs-body ul,
+.docs-body ol {
+  margin-top: 0.75rem;
+  color: color-mix(in oklab, var(--color-fg) 88%, var(--color-muted));
+}
+
+.docs-body ul,
+.docs-body ol {
+  padding-left: 1.2rem;
+}
+
+.docs-body li + li {
+  margin-top: 0.3rem;
+}
+
+.docs-body a {
+  color: var(--color-signal);
+  text-decoration: underline;
+  text-underline-offset: 0.15em;
+}
+
+.docs-body code {
+  border-radius: 0.35rem;
+  background: var(--color-surface);
+  padding: 0.05rem 0.3rem;
+  font-size: 0.85em;
+  overflow-wrap: anywhere;
+}
+
+.docs-body pre {
+  margin-top: 0.9rem;
+  overflow: auto;
+  border-radius: 0.9rem;
+  border: 1px solid var(--color-line);
+  background: var(--color-surface);
+  padding: 0.9rem 1rem;
+}
+
+.docs-body pre code {
+  background: transparent;
+  padding: 0;
+}
+
+.docs-table {
+  margin-top: 0.9rem;
+  overflow: auto;
+  border: 1px solid var(--color-line);
+  border-radius: 0.9rem;
+}
+
+.docs-body table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.85rem;
+}
+
+.docs-body th,
+.docs-body td {
+  border-bottom: 1px solid var(--color-line);
+  padding: 0.55rem 0.7rem;
+  text-align: left;
+  vertical-align: top;
+}
+
+.docs-body th {
+  color: var(--color-muted);
+  font-weight: 500;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}

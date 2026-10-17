@@ -1,0 +1,12 @@
+node_modules/
+.grok/
+.vercel/
+dist/
+screenshots/
+artifacts/
+**/__pycache__/
+*.pyc
+.env
+.env.*
+*.log
+.DS_Store
