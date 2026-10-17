@@ -331,6 +331,85 @@ def _modern(model: ModelRef, positive: Cond, negative: Cond, vae_path: str | Non
     return _take_image(_invoke(pipe, call))
 
 
+def _edit_classes(kind: str, mode: str) -> tuple[str, ...]:
+    if mode == "inpaint":
+        return {
+            "sdxl": ("StableDiffusionXLInpaintPipeline",),
+            "sd15": ("StableDiffusionInpaintPipeline",),
+            "flux": ("FluxFillPipeline",),
+            "flux2": ("Flux2FillPipeline",),
+            "krea2": ("Krea2InpaintPipeline", "QwenImageInpaintPipeline"),
+            "qwen": ("QwenImageInpaintPipeline", "QwenImageEditPlusPipeline"),
+            "zimage": ("ZImageInpaintPipeline",),
+        }.get(kind, ())
+    return {
+        "sdxl": ("StableDiffusionXLImg2ImgPipeline",),
+        "sd15": ("StableDiffusionImg2ImgPipeline",),
+        "flux": ("FluxImg2ImgPipeline",),
+        "flux2": ("Flux2Img2ImgPipeline",),
+        "krea2": ("Krea2Img2ImgPipeline", "QwenImageImg2ImgPipeline"),
+        "qwen": ("QwenImageImg2ImgPipeline", "QwenImageEditPipeline"),
+        "zimage": ("ZImageImg2ImgPipeline",),
+    }.get(kind, ())
+
+
+def _edit_image(model, positive, negative, vae_path, width, height, steps, cfg, seed, denoise, init_image, mask, edit_mode):
+    import torch
+    import diffusers
+
+    mode = "inpaint" if edit_mode == "outpaint" or mask is not None and edit_mode != "edit" else "edit"
+    if edit_mode == "inpaint" or edit_mode == "outpaint":
+        mode = "inpaint"
+    names = _edit_classes(model.kind, mode)
+    pipe_cls = _first_class(diffusers, names) if names else None
+    if pipe_cls is None:
+        wanted = names[0] if names else f"{model.kind} img2img"
+        raise RuntimeError(
+            f"{model.kind} {edit_mode} needs {wanted} in the diffusers build inside pythonembedded. "
+            "Text-to-image still runs. Upgrade diffusers, or use an SDXL checkpoint for edit, inpaint, and outpaint."
+        )
+    dtype = _torch_dtype(model.dtype, torch.float16 if torch.cuda.is_available() else torch.float32)
+    try:
+        pipe = pipe_cls.from_single_file(model.path, torch_dtype=dtype, local_files_only=True)
+    except Exception:
+        pipe = pipe_cls.from_single_file(model.path, torch_dtype=dtype)
+    if vae_path:
+        try:
+            from diffusers import AutoencoderKL
+
+            pipe.vae = AutoencoderKL.from_single_file(vae_path, torch_dtype=dtype)
+        except Exception:
+            pass
+    if positive.clip.paths and model.kind not in ("sdxl", "sd15"):
+        try:
+            encoder, _kind = _encoder(positive.clip.paths[0])
+            pipe.text_encoder = encoder
+        except Exception:
+            pass
+    pipe = _move(pipe, dtype)
+    _apply_loras(pipe, model.loras)
+    image = init_image.convert("RGB").resize((int(width), int(height)))
+    strength = min(1.0, max(0.01, float(denoise)))
+    generator = torch.Generator(device="cpu").manual_seed(int(seed))
+    call = {
+        "prompt": positive.text,
+        "negative_prompt": negative.text or None,
+        "image": image,
+        "strength": strength,
+        "width": int(width),
+        "height": int(height),
+        "num_inference_steps": int(steps),
+        "guidance_scale": float(cfg if model.kind in ("sdxl", "sd15") else max(cfg, 1)),
+        "generator": generator,
+    }
+    if mode == "inpaint":
+        painted = mask.convert("L").resize((int(width), int(height))) if mask is not None else None
+        if painted is None:
+            raise RuntimeError("Inpaint and outpaint need a mask. Paint the area to change, or set padding for outpaint.")
+        call["mask_image"] = painted
+    return _take_image(_invoke(pipe, call))
+
+
 def sample_image(
     model: ModelRef,
     positive: Cond,
@@ -346,8 +425,27 @@ def sample_image(
     scheduler: str,
     denoise: float,
     frames: int = 1,
+    init_image: Any = None,
+    mask: Any = None,
+    edit_mode: str = "generate",
 ) -> Any:
-    del scheduler, denoise
+    del scheduler
+    if init_image is not None and edit_mode in ("edit", "inpaint", "outpaint"):
+        return _edit_image(
+            model,
+            positive,
+            negative,
+            vae_path,
+            width,
+            height,
+            steps,
+            cfg if model.kind in ("sdxl", "sd15") else guidance,
+            seed,
+            denoise,
+            init_image,
+            mask,
+            edit_mode,
+        )
     if model.kind == "flux":
         if positive.clip.paths:
             return _flux(model, positive, negative, vae_path, width, height, steps, guidance, seed)

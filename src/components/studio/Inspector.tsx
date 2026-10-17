@@ -1,5 +1,10 @@
+import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
 import { Dices, Trash2 } from "lucide-react";
+import { readStudioImage } from "@/lib/studio/image";
 import {
+  EDIT_MODES,
+  ENHANCE_SYSTEM,
+  LLM_ENDPOINTS,
   SAMPLERS,
   SCHEDULERS,
   findModel,
@@ -8,9 +13,11 @@ import {
   modelsForKind,
   nodeTitle,
   portsFor,
+  type EditMode,
   type GraphNode,
   type PortKind,
 } from "@/lib/studio/model";
+import { listLlmModels } from "@/lib/studio/engine";
 import { useActive, useStudio } from "@/lib/studio/store";
 
 export function Inspector({ dock = false }: { dock?: boolean }) {
@@ -48,6 +55,11 @@ export function Inspector({ dock = false }: { dock?: boolean }) {
       </div>
       <div className="min-h-0 flex-1 space-y-4 overflow-auto px-4 py-4">
         <ModelField node={node} />
+        {node.kind === "image" ? <ImageFields node={node} /> : null}
+        {node.kind === "enhance" ? <EnhanceFields node={node} /> : null}
+        {node.kind === "preview" ? (
+          <p className="text-sm leading-relaxed text-muted">Wire an image into this card to see it here and on the canvas. Preview also opens the latest result of this graph.</p>
+        ) : null}
         {node.kind === "diffusion" ? (
           <label className="block text-sm text-muted">
             Weight dtype
@@ -139,7 +151,7 @@ export function Inspector({ dock = false }: { dock?: boolean }) {
 function ModelField({ node }: { node: GraphNode }) {
   const models = useStudio((s) => s.models);
   const patchNode = useStudio((s) => s.patchNode);
-  if (node.kind === "prompt" || node.kind === "sampler" || node.kind === "save") return null;
+  if (node.kind === "prompt" || node.kind === "sampler" || node.kind === "save" || node.kind === "image" || node.kind === "preview" || node.kind === "enhance") return null;
   const options = modelsForKind(models, node.kind);
   return (
     <label className="block text-sm text-muted">
@@ -159,17 +171,53 @@ function ModelField({ node }: { node: GraphNode }) {
 function SamplerFields({ node }: { node: GraphNode }) {
   const patchNode = useStudio((s) => s.patchNode);
   const d = node.data;
+  const mode = d.editMode ?? "generate";
   return (
     <div className="space-y-3">
+      <label className="block text-sm text-muted">
+        Mode
+        <select
+          className="field mt-1"
+          value={mode}
+          onChange={(e) => patchNode(node.id, { editMode: e.target.value as EditMode, denoise: e.target.value === "generate" ? 1 : (d.denoise && d.denoise < 1 ? d.denoise : 0.55) })}
+        >
+          {EDIT_MODES.map((item) => (
+            <option key={item.id} value={item.id}>
+              {item.label}
+            </option>
+          ))}
+        </select>
+      </label>
+      <p className="text-sm leading-relaxed text-muted">
+        {mode === "generate"
+          ? "A new picture from the prompt."
+          : mode === "edit"
+            ? "Img2img. Connect an image. Denoise is how far the model is allowed to move from it."
+            : mode === "inpaint"
+              ? "Paint a mask on the image. The model changes only that area."
+              : "Grows the canvas by the padding below, then fills the new area."}
+      </p>
       <div className="grid grid-cols-2 gap-3">
         <Num label="Steps" value={d.steps ?? 20} step={1} min={1} max={150} onChange={(n) => patchNode(node.id, { steps: n })} />
         <Num label="CFG / guidance" value={d.cfg ?? 1} step={0.1} min={0} max={30} onChange={(n) => patchNode(node.id, { cfg: n })} />
-        <Num label="Width" value={d.width ?? 1024} step={64} min={256} max={2560} onChange={(n) => patchNode(node.id, { width: n })} />
-        <Num label="Height" value={d.height ?? 1024} step={64} min={256} max={2560} onChange={(n) => patchNode(node.id, { height: n })} />
+        {mode === "generate" ? (
+          <>
+            <Num label="Width" value={d.width ?? 1024} step={64} min={256} max={2560} onChange={(n) => patchNode(node.id, { width: n })} />
+            <Num label="Height" value={d.height ?? 1024} step={64} min={256} max={2560} onChange={(n) => patchNode(node.id, { height: n })} />
+            <Num label="Frames" value={d.frames ?? 1} step={1} min={1} max={241} onChange={(n) => patchNode(node.id, { frames: n })} />
+          </>
+        ) : null}
         <Num label="Batch" value={d.batch ?? 1} step={1} min={1} max={8} onChange={(n) => patchNode(node.id, { batch: n })} />
-        <Num label="Frames" value={d.frames ?? 1} step={1} min={1} max={241} onChange={(n) => patchNode(node.id, { frames: n })} />
         <Num label="Denoise" value={d.denoise ?? 1} step={0.05} min={0} max={1} onChange={(n) => patchNode(node.id, { denoise: n })} />
       </div>
+      {mode === "outpaint" ? (
+        <div className="grid grid-cols-2 gap-3">
+          <Num label="Pad left" value={d.padLeft ?? 128} step={8} min={0} max={1024} onChange={(n) => patchNode(node.id, { padLeft: n })} />
+          <Num label="Pad right" value={d.padRight ?? 128} step={8} min={0} max={1024} onChange={(n) => patchNode(node.id, { padRight: n })} />
+          <Num label="Pad top" value={d.padTop ?? 128} step={8} min={0} max={1024} onChange={(n) => patchNode(node.id, { padTop: n })} />
+          <Num label="Pad bottom" value={d.padBottom ?? 128} step={8} min={0} max={1024} onChange={(n) => patchNode(node.id, { padBottom: n })} />
+        </div>
+      ) : null}
       <label className="block text-sm text-muted">
         Sampler
         <select className="field mt-1" value={d.sampler ?? "euler"} onChange={(e) => patchNode(node.id, { sampler: e.target.value })}>
@@ -262,4 +310,237 @@ function folderHint(node: GraphNode, models: ReturnType<typeof useStudio.getStat
   if (node.kind === "textEncoder") return `${folder?.label} is searched by CLIPLoader and DualCLIPLoader.`;
   if (node.kind === "lora") return "Placed in loras/. Strength is applied in chain order, closest to the sampler last.";
   return "";
+}
+
+function ImageFields({ node }: { node: GraphNode }) {
+  const patchNode = useStudio((s) => s.patchNode);
+  return (
+    <div className="space-y-3">
+      <label className="block text-sm text-muted">
+        Picture
+        <input
+          type="file"
+          accept="image/*"
+          className="field mt-1"
+          onChange={(event) => {
+            const file = event.target.files?.[0];
+            if (!file) return;
+            void readStudioImage(file).then((image) =>
+              patchNode(node.id, {
+                imageName: image.name,
+                imageData: image.data,
+                imageWidth: image.width,
+                imageHeight: image.height,
+                maskData: undefined,
+              }),
+            );
+          }}
+        />
+      </label>
+      {node.data.imageData ? (
+        <MaskPainter
+          image={node.data.imageData}
+          mask={node.data.maskData}
+          width={node.data.imageWidth ?? 512}
+          height={node.data.imageHeight ?? 512}
+          onChange={(maskData) => patchNode(node.id, { maskData })}
+        />
+      ) : (
+        <p className="text-sm text-muted">Drop a picture on the canvas, or choose one here. Then set the sampler to Edit, Inpaint, or Outpaint.</p>
+      )}
+    </div>
+  );
+}
+
+function MaskPainter({
+  image,
+  mask,
+  width,
+  height,
+  onChange,
+}: {
+  image: string;
+  mask?: string;
+  width: number;
+  height: number;
+  onChange: (mask: string) => void;
+}) {
+  const viewRef = useRef<HTMLCanvasElement>(null);
+  const maskRef = useRef<HTMLCanvasElement | null>(null);
+  const drawing = useRef(false);
+
+  useEffect(() => {
+    const board = document.createElement("canvas");
+    board.width = width;
+    board.height = height;
+    const ctx = board.getContext("2d");
+    if (!ctx) return;
+    ctx.fillStyle = "#000";
+    ctx.fillRect(0, 0, width, height);
+    maskRef.current = board;
+    const paint = () => drawView(viewRef.current, board, image, width, height);
+    if (!mask) {
+      paint();
+      return;
+    }
+    const overlay = new Image();
+    overlay.onload = () => {
+      ctx.drawImage(overlay, 0, 0, width, height);
+      paint();
+    };
+    overlay.src = mask;
+  }, [image, mask, width, height]);
+
+  function stroke(event: ReactPointerEvent<HTMLCanvasElement>, end = false) {
+    const board = maskRef.current;
+    const view = viewRef.current;
+    if (!board || !view) return;
+    const ctx = board.getContext("2d");
+    if (!ctx) return;
+    const rect = view.getBoundingClientRect();
+    const x = ((event.clientX - rect.left) / rect.width) * width;
+    const y = ((event.clientY - rect.top) / rect.height) * height;
+    if (drawing.current || event.type === "pointerdown") {
+      ctx.fillStyle = "#fff";
+      ctx.beginPath();
+      ctx.arc(x, y, Math.max(12, width / 28), 0, Math.PI * 2);
+      ctx.fill();
+      drawView(view, board, image, width, height);
+    }
+    if (end) {
+      drawing.current = false;
+      onChange(board.toDataURL("image/png"));
+    }
+  }
+
+  return (
+    <div className="space-y-2">
+      <p className="text-sm text-muted">Paint the area to change. Used by Inpaint. Outpaint grows the frame instead.</p>
+      <canvas
+        ref={viewRef}
+        width={width}
+        height={height}
+        className="w-full cursor-crosshair rounded-xl bg-bg"
+        onPointerDown={(event) => {
+          drawing.current = true;
+          event.currentTarget.setPointerCapture(event.pointerId);
+          stroke(event);
+        }}
+        onPointerMove={(event) => {
+          if (!drawing.current) return;
+          stroke(event);
+        }}
+        onPointerUp={(event) => stroke(event, true)}
+      />
+      <button
+        type="button"
+        className="h-10 rounded-full border border-line px-3 text-sm"
+        onClick={() => {
+          const board = maskRef.current;
+          const ctx = board?.getContext("2d");
+          if (!board || !ctx) return;
+          ctx.fillStyle = "#000";
+          ctx.fillRect(0, 0, width, height);
+          drawView(viewRef.current, board, image, width, height);
+          onChange("");
+        }}
+      >
+        Clear mask
+      </button>
+    </div>
+  );
+}
+
+function drawView(view: HTMLCanvasElement | null, mask: HTMLCanvasElement, image: string, width: number, height: number) {
+  if (!view) return;
+  const ctx = view.getContext("2d");
+  const maskCtx = mask.getContext("2d");
+  if (!ctx || !maskCtx) return;
+  const paint = (photo: HTMLImageElement) => {
+    ctx.drawImage(photo, 0, 0, width, height);
+    const marks = maskCtx.getImageData(0, 0, width, height);
+    const frame = ctx.getImageData(0, 0, width, height);
+    for (let i = 0; i < marks.data.length; i += 4) {
+      const amount = (marks.data[i] / 255) * 0.55;
+      if (amount < 0.02) continue;
+      frame.data[i] = Math.round(frame.data[i] * (1 - amount) + 158 * amount);
+      frame.data[i + 1] = Math.round(frame.data[i + 1] * (1 - amount) + 203 * amount);
+      frame.data[i + 2] = Math.round(frame.data[i + 2] * (1 - amount) + 182 * amount);
+    }
+    ctx.putImageData(frame, 0, 0);
+  };
+  const cached = photoCache.get(image);
+  if (cached?.complete) {
+    paint(cached);
+    return;
+  }
+  const photo = new Image();
+  photo.onload = () => {
+    photoCache.set(image, photo);
+    paint(photo);
+  };
+  photo.src = image;
+}
+
+const photoCache = new Map<string, HTMLImageElement>();
+
+function EnhanceFields({ node }: { node: GraphNode }) {
+  const patchNode = useStudio((s) => s.patchNode);
+  const engineUrl = useStudio((s) => s.engineUrl);
+  const [models, setModels] = useState<string[]>([]);
+  const [note, setNote] = useState("");
+  const d = node.data;
+  return (
+    <div className="space-y-3">
+      <label className="block text-sm text-muted">
+        System prompt
+        <textarea className="field mt-1 min-h-24 resize-y" value={d.system ?? ENHANCE_SYSTEM} onChange={(e) => patchNode(node.id, { system: e.target.value })} />
+      </label>
+      <label className="block text-sm text-muted">
+        Prompt to rewrite
+        <textarea
+          className="field mt-1 min-h-24 resize-y"
+          value={d.text ?? ""}
+          placeholder="What should change, or the prompt to expand"
+          onChange={(e) => patchNode(node.id, { text: e.target.value })}
+        />
+      </label>
+      <label className="block text-sm text-muted">
+        LLM server
+        <select className="field mt-1" value={d.endpoint ?? LLM_ENDPOINTS[0].url} onChange={(e) => patchNode(node.id, { endpoint: e.target.value })}>
+          {LLM_ENDPOINTS.map((item) => (
+            <option key={item.url} value={item.url}>
+              {item.label} · {item.url}
+            </option>
+          ))}
+        </select>
+      </label>
+      <label className="block text-sm text-muted">
+        LLM model
+        <input className="field mt-1" value={d.llm ?? ""} placeholder="llama3.1" onChange={(e) => patchNode(node.id, { llm: e.target.value })} list={`llm-${node.id}`} />
+        <datalist id={`llm-${node.id}`}>
+          {models.map((name) => (
+            <option key={name} value={name} />
+          ))}
+        </datalist>
+      </label>
+      <button
+        type="button"
+        className="h-10 rounded-full border border-line px-3 text-sm"
+        onClick={() => {
+          setNote("Asking the engine…");
+          void listLlmModels(engineUrl, d.endpoint ?? LLM_ENDPOINTS[0].url).then((found) => {
+            setModels(found);
+            setNote(found.length ? `${found.length} models` : "No models. Is that server running?");
+            if (found[0] && !d.llm) patchNode(node.id, { llm: found[0] });
+          });
+        }}
+      >
+        List models
+      </button>
+      {note ? <p className="text-sm text-muted">{note}</p> : null}
+      <Num label="Temperature" value={d.temperature ?? 0.4} step={0.1} min={0} max={2} onChange={(n) => patchNode(node.id, { temperature: n })} />
+      <p className="text-sm leading-relaxed text-muted">Wire the text output into a prompt. An optional image input is sent when the LLM can see pictures. The engine calls the server when you press Run.</p>
+    </div>
+  );
 }

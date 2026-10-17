@@ -52,9 +52,11 @@ export const FAMILIES: Family[] = [
   "generic",
 ];
 
-export type NodeKind = "diffusion" | "lora" | "textEncoder" | "vae" | "prompt" | "sampler" | "save";
+export type NodeKind = "diffusion" | "lora" | "textEncoder" | "vae" | "prompt" | "sampler" | "save" | "image" | "preview" | "enhance";
 
-export type PortKind = "model" | "clip" | "vae" | "cond" | "image";
+export type PortKind = "model" | "clip" | "vae" | "cond" | "image" | "text";
+
+export type EditMode = "generate" | "edit" | "inpaint" | "outpaint";
 
 export type WeightDtype = "default" | "fp8_e4m3fn" | "fp8_e5m2";
 
@@ -86,6 +88,20 @@ export type NodeData = {
   frames?: number;
   denoise?: number;
   prefix?: string;
+  imageName?: string;
+  imageData?: string;
+  maskData?: string;
+  imageWidth?: number;
+  imageHeight?: number;
+  editMode?: EditMode;
+  padLeft?: number;
+  padRight?: number;
+  padTop?: number;
+  padBottom?: number;
+  system?: string;
+  llm?: string;
+  endpoint?: string;
+  temperature?: number;
 };
 
 export type GraphNode = {
@@ -301,19 +317,25 @@ export function kindForFolder(folder: FolderId): NodeKind | null {
 export function nodeSize(kind: NodeKind): { w: number; h: number } {
   switch (kind) {
     case "diffusion":
-      return { w: 248, h: 132 };
+      return { w: 248, h: 168 };
     case "lora":
-      return { w: 248, h: 132 };
+      return { w: 248, h: 176 };
     case "textEncoder":
-      return { w: 248, h: 118 };
+      return { w: 248, h: 156 };
     case "vae":
-      return { w: 220, h: 108 };
+      return { w: 220, h: 148 };
     case "prompt":
       return { w: 280, h: 150 };
     case "sampler":
-      return { w: 248, h: 156 };
+      return { w: 260, h: 228 };
     case "save":
       return { w: 210, h: 104 };
+    case "image":
+      return { w: 248, h: 220 };
+    case "preview":
+      return { w: 248, h: 196 };
+    case "enhance":
+      return { w: 280, h: 236 };
   }
 }
 
@@ -338,7 +360,10 @@ export function portsFor(kind: NodeKind): { inputs: PortDef[]; outputs: PortDef[
       return { inputs: [], outputs: [{ name: "vae", label: "VAE", kind: "vae" }] };
     case "prompt":
       return {
-        inputs: [{ name: "clip", label: "CLIP", kind: "clip" }],
+        inputs: [
+          { name: "clip", label: "CLIP", kind: "clip" },
+          { name: "text", label: "Enhanced", kind: "text" },
+        ],
         outputs: [{ name: "cond", label: "Conditioning", kind: "cond" }],
       };
     case "sampler":
@@ -348,11 +373,21 @@ export function portsFor(kind: NodeKind): { inputs: PortDef[]; outputs: PortDef[
           { name: "positive", label: "Positive", kind: "cond" },
           { name: "negative", label: "Negative", kind: "cond" },
           { name: "vae", label: "VAE", kind: "vae" },
+          { name: "image", label: "Image", kind: "image" },
         ],
         outputs: [{ name: "image", label: "Image", kind: "image" }],
       };
     case "save":
       return { inputs: [{ name: "image", label: "Image", kind: "image" }], outputs: [] };
+    case "image":
+      return { inputs: [], outputs: [{ name: "image", label: "Image", kind: "image" }] };
+    case "preview":
+      return { inputs: [{ name: "image", label: "Image", kind: "image" }], outputs: [] };
+    case "enhance":
+      return {
+        inputs: [{ name: "image", label: "Image", kind: "image" }],
+        outputs: [{ name: "text", label: "Text", kind: "text" }],
+      };
   }
 }
 
@@ -391,6 +426,12 @@ export function kindLabel(kind: NodeKind): string {
       return "Sampler";
     case "save":
       return "Save";
+    case "image":
+      return "Image";
+    case "preview":
+      return "Preview";
+    case "enhance":
+      return "Enhancer";
   }
 }
 
@@ -399,10 +440,32 @@ export function findModel(models: ModelFile[], id?: string): ModelFile | null {
   return models.find((m) => m.id === id) ?? null;
 }
 
+export const EDIT_MODES: { id: EditMode; label: string }[] = [
+  { id: "generate", label: "Generate" },
+  { id: "edit", label: "Edit image" },
+  { id: "inpaint", label: "Inpaint" },
+  { id: "outpaint", label: "Outpaint" },
+];
+
+export const LLM_ENDPOINTS = [
+  { label: "Ollama", url: "http://127.0.0.1:11434/v1" },
+  { label: "LM Studio", url: "http://127.0.0.1:1234/v1" },
+];
+
+export const ENHANCE_SYSTEM =
+  "You rewrite image prompts. Keep the subject and the intent. Add light, lens, texture, and composition. Return only the prompt, with no explanation.";
+
+export function editLabel(mode: EditMode | undefined): string {
+  return EDIT_MODES.find((item) => item.id === (mode ?? "generate"))?.label ?? "Generate";
+}
+
 export function nodeTitle(node: GraphNode, models: ModelFile[]): string {
   if (node.kind === "prompt") return node.data.role === "negative" ? "Negative" : "Positive";
-  if (node.kind === "sampler") return "KSampler";
+  if (node.kind === "sampler") return editLabel(node.data.editMode);
   if (node.kind === "save") return node.data.prefix || "locgen";
+  if (node.kind === "image") return node.data.imageName || "Drop an image";
+  if (node.kind === "preview") return "Preview";
+  if (node.kind === "enhance") return node.data.llm || "Name an LLM";
   const model = findModel(models, node.data.modelId);
   return model ? baseName(model.name) : "Choose a file";
 }
@@ -416,9 +479,24 @@ export function nodeSubtitle(node: GraphNode, models: ModelFile[]): string {
   }
   if (node.kind === "sampler") {
     const guidance = node.data.cfg ?? 1;
-    return `${node.data.sampler ?? "euler"} · ${node.data.scheduler ?? "simple"} · ${node.data.steps ?? 20} steps · ${guidance} cfg · ${node.data.width ?? 1024}×${node.data.height ?? 1024}`;
+    const mode = node.data.editMode ?? "generate";
+    const size =
+      mode === "generate"
+        ? `${node.data.width ?? 1024}×${node.data.height ?? 1024}`
+        : mode === "outpaint"
+          ? `pad ${node.data.padLeft ?? 128}/${node.data.padRight ?? 128}/${node.data.padTop ?? 128}/${node.data.padBottom ?? 128}`
+          : `denoise ${node.data.denoise ?? 0.55}`;
+    return `${node.data.sampler ?? "euler"} · ${node.data.scheduler ?? "simple"} · ${node.data.steps ?? 20} steps · ${guidance} cfg · ${size}`;
   }
   if (node.kind === "save") return "SaveImage prefix";
+  if (node.kind === "image") {
+    if (!node.data.imageData) return "Drop a picture here, or choose a file";
+    return node.data.maskData ? "Mask painted · wire this into the sampler" : "Wire into the sampler image port";
+  }
+  if (node.kind === "preview") return "Shows the picture wired into this card";
+  if (node.kind === "enhance") {
+    return node.data.endpoint?.includes("1234") ? "LM Studio" : "Ollama or any OpenAI-compatible server";
+  }
   if (node.kind === "lora") {
     return `model ${node.data.strengthModel ?? 1} · clip ${node.data.strengthClip ?? 1}`;
   }
@@ -791,6 +869,62 @@ export function sdxlWorkflow(): Workflow {
   };
 }
 
+export function editWorkflow(): Workflow {
+  return {
+    id: "wf-edit",
+    name: "Image edit",
+    pan: { x: 24, y: 28 },
+    zoom: 0.92,
+    selectedId: "sam",
+    nodes: [
+      node("ckpt", "diffusion", 24, 180, { modelId: "ckpt-sdxl", weightDtype: "default" }),
+      node("img", "image", 24, 400, {}),
+      node("enh", "enhance", 340, 8, {
+        system: ENHANCE_SYSTEM,
+        text: "Keep the person. Change the light to late afternoon and the background to a quiet street.",
+        llm: "",
+        endpoint: LLM_ENDPOINTS[0].url,
+        temperature: 0.4,
+      }),
+      node("pos", "prompt", 680, 8, {
+        role: "positive",
+        text: "Keep the person. Change the light to late afternoon and the background to a quiet street.",
+      }),
+      node("neg", "prompt", 680, 200, {
+        role: "negative",
+        text: "blurry, extra fingers, watermark, plastic skin",
+      }),
+      node("sam", "sampler", 1040, 80, {
+        steps: 28,
+        cfg: 6,
+        sampler: "dpmpp_2m",
+        scheduler: "karras",
+        seed: 21,
+        width: 1024,
+        height: 1024,
+        batch: 1,
+        denoise: 0.55,
+        editMode: "edit",
+        padLeft: 160,
+        padRight: 160,
+        padTop: 96,
+        padBottom: 96,
+      }),
+      node("view", "preview", 1040, 360, {}),
+      node("save", "save", 1340, 160, { prefix: "locgen/edit" }),
+    ],
+    edges: [
+      edge("e1", "ckpt", "model", "sam", "model"),
+      edge("e2", "enh", "text", "pos", "text"),
+      edge("e3", "pos", "cond", "sam", "positive"),
+      edge("e4", "neg", "cond", "sam", "negative"),
+      edge("e5", "img", "image", "sam", "image"),
+      edge("e6", "img", "image", "view", "image"),
+      edge("e7", "sam", "image", "save", "image"),
+    ],
+  };
+}
+
 export function blankNode(kind: NodeKind, x: number, y: number): GraphNode {
   const id = uid(kind.slice(0, 3));
   const data: NodeData = {};
@@ -813,8 +947,20 @@ export function blankNode(kind: NodeKind, x: number, y: number): GraphNode {
     data.height = 1024;
     data.batch = 1;
     data.denoise = 1;
+    data.editMode = "generate";
+    data.padLeft = 128;
+    data.padRight = 128;
+    data.padTop = 128;
+    data.padBottom = 128;
   }
   if (kind === "save") data.prefix = "locgen";
+  if (kind === "enhance") {
+    data.system = ENHANCE_SYSTEM;
+    data.text = "";
+    data.llm = "";
+    data.endpoint = LLM_ENDPOINTS[0].url;
+    data.temperature = 0.4;
+  }
   return { id, kind, x, y, data };
 }
 

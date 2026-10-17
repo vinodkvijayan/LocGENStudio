@@ -40,6 +40,30 @@ def _device_name() -> str:
     return "CPU"
 
 
+def _llm_models(base: str) -> list[str]:
+    import urllib.request
+
+    if not base.startswith(("http://127.0.0.1", "http://localhost")):
+        return []
+    try:
+        with urllib.request.urlopen(base + "/models", timeout=4) as response:
+            payload = json.load(response)
+    except Exception:
+        return []
+    rows = []
+    if isinstance(payload, dict):
+        rows = payload.get("data") or payload.get("models") or []
+    names = []
+    for row in rows or []:
+        if isinstance(row, str):
+            names.append(row)
+        elif isinstance(row, dict):
+            name = row.get("id") or row.get("name") or row.get("model")
+            if name:
+                names.append(str(name))
+    return names
+
+
 def _record(prompt_id: str, **fields) -> None:
     with _lock:
         item = _jobs.setdefault(prompt_id, {})
@@ -143,7 +167,10 @@ class Handler(BaseHTTPRequestHandler):
                 },
             )
             return
-        if path == "/queue":
+        if path == "/llm/models":
+            base = (parse_qs(parsed.query).get("base") or [""])[0].rstrip("/")
+            self._json(200, {"models": _llm_models(base)})
+            return
             with _lock:
                 running = [[0, pid] for pid, job in _jobs.items() if job.get("state") == "running"]
                 pending = [[0, pid] for pid, job in _jobs.items() if job.get("state") == "pending"]

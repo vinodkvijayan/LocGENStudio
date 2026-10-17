@@ -1,12 +1,12 @@
 # LocGENStudio
 
-**0.8.7.** A local generative studio for Windows 11.
+**0.9.0.** A local generative studio for Windows 11.
 
 You wire a graph on the canvas. The engine on this PC loads the weights you already have and samples on the GPU that `pythonembedded` can see. Diffusion models, LoRAs, text encoders, VAEs, and checkpoints stay in one models folder, in the same layout a local engine expects. The studio sends filenames and sampler settings. It does not upload the files. A browser preview cannot see the GPU. A real image shows up only after the starter is listening on this machine.
 
 Built-in graphs cover Flux, Flux Schnell, Flux 2 Klein, Krea 2, Qwen Image 2.1, Z-Image, SDXL, SD 1.5, Wan 2.2, LTX 2.5, and MiniMax H3. Open **Graphs** and start from one of those instead of wiring the loaders by hand.
 
-The Windows package for this version is [v0.8.7](https://github.com/vinodkvijayan/LocGENStudio/releases/tag/v0.8.7).
+The Windows package for this version is [v0.9.0](https://github.com/vinodkvijayan/LocGENStudio/releases/tag/v0.9.0).
 
 ## Screenshots
 
@@ -33,6 +33,20 @@ The Windows package for this version is [v0.8.7](https://github.com/vinodkvijaya
 **Windows.** The models root, the engine URL, and the starter.
 
 ![Windows setup](docs/screenshots/windows.png)
+
+## Edit a picture
+
+Drop a picture on the canvas, or add an Image card and choose a file. Set the sampler dropdown to **Edit image**, **Inpaint**, or **Outpaint**, and wire the image into the sampler.
+
+- **Edit** is img2img. Denoise is how far the model may move from the picture.
+- **Inpaint** changes only the area you paint. Select the image card and paint in the inspector. Pale green is the mask.
+- **Outpaint** grows the frame by the padding on the sampler, then fills the new area.
+
+**Preview** opens the selected picture, or the latest result of this graph. A Preview card shows whatever image is wired into it. Drag a card to move it. Drag a node from **+** onto the canvas. Diffusion, LoRA, text encoder, VAE, and sampler cards have dropdowns for the file, the sampler, and the schedule.
+
+A **Prompt enhancer** takes a system prompt, the prompt to rewrite, and an LLM model name. Point it at Ollama (`http://127.0.0.1:11434/v1`) or LM Studio (`http://127.0.0.1:1234/v1`). Wire its text output into a prompt. An optional image input is sent when the model can see pictures. The engine calls that server when you press Run.
+
+**Graphs → New image edit** starts that layout. SDXL checkpoints are the reliable path for edit, inpaint, and outpaint. Other families need the matching img2img or inpaint class in the diffusers build inside `pythonembedded`.
 
 ## Layout
 

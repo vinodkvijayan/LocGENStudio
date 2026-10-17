@@ -165,10 +165,76 @@ def test_http() -> None:
             _restore_sample(saved)
 
 
+def test_edit_and_enhancer() -> None:
+    import base64
+    import io
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+    from PIL import Image
+
+    picture = Image.new("RGB", (32, 24), (20, 40, 60))
+    buf = io.BytesIO()
+    picture.save(buf, format="PNG")
+    data = "data:image/png;base64," + base64.b64encode(buf.getvalue()).decode()
+    seen = {"n": 0}
+
+    class Reply(BaseHTTPRequestHandler):
+        def do_POST(self):
+            length = int(self.headers.get("Content-Length", "0"))
+            body = json.loads(self.rfile.read(length) or b"{}")
+            assert body["model"] == "llama-test"
+            assert "a street" in body["messages"][1]["content"]
+            seen["n"] += 1
+            raw = json.dumps({"choices": [{"message": {"content": "late afternoon street, natural skin, 50mm"}}]}).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(raw)))
+            self.end_headers()
+            self.wfile.write(raw)
+
+        def log_message(self, fmt, *args):
+            return
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Reply)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    host, port = server.server_address
+    try:
+        with tempfile.TemporaryDirectory() as tmp:
+            set_output_dir(Path(tmp) / "output")
+            saved = execute(
+                {
+                    "1": {"class_type": "LoadImage", "inputs": {"image": data}},
+                    "2": {
+                        "class_type": "ImagePadForOutpaint",
+                        "inputs": {"image": ["1", 0], "left": 8, "right": 4, "top": 2, "bottom": 6, "feathering": 1},
+                    },
+                    "3": {"class_type": "SaveImage", "inputs": {"images": ["2", 0], "filename_prefix": "locgen/pad"}},
+                    "4": {
+                        "class_type": "PromptEnhancer",
+                        "inputs": {
+                            "prompt": "a street",
+                            "model": "llama-test",
+                            "system": "Rewrite.",
+                            "base_url": f"http://{host}:{port}/v1",
+                            "temperature": 0.2,
+                        },
+                    },
+                }
+            )
+            assert saved["3"]["images"][0]["filename"].startswith("pad_")
+            opened = Image.open(next((Path(tmp) / "output").rglob("*.png")))
+            assert opened.size == (32 + 12, 24 + 8)
+            assert seen["n"] == 1
+    finally:
+        server.shutdown()
+
+
 def main() -> None:
     test_unknown_node()
     test_missing_weight()
     test_graph()
+    test_edit_and_enhancer()
     test_http()
     print("locgen selftest ok")
 

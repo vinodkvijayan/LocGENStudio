@@ -42,10 +42,18 @@ export function JobsView() {
 }
 
 function JobBody({ job }: { job: Job }) {
+  const [full, setFull] = useState(false);
   return (
     <div className="border-t border-line px-4 py-3">
       {job.imageUrl ? (
-        <img src={job.imageUrl} alt="" className="mb-3 max-h-96 w-full rounded-xl bg-bg object-contain" />
+        <button type="button" className="mb-3 block w-full" onClick={() => setFull(true)} aria-label="Preview image">
+          <img src={job.imageUrl} alt="" className="max-h-96 w-full rounded-xl bg-bg object-contain" />
+        </button>
+      ) : null}
+      {full && job.imageUrl ? (
+        <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/75 p-6" onClick={() => setFull(false)}>
+          <img src={job.imageUrl} alt="Preview" className="max-h-[85vh] max-w-full rounded-2xl object-contain" />
+        </div>
       ) : null}
       <p className="text-xs text-muted">{job.chain.join(" → ")}</p>
       <div className="mt-3 flex gap-2">

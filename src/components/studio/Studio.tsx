@@ -10,6 +10,7 @@ import { compile } from "@/lib/studio/compile";
 import { friendlyFetchError, pollImage, probeEngine, queuePrompt } from "@/lib/studio/engine";
 import {
   type NodeKind,
+  editWorkflow,
   fluxWorkflow,
   inferenceBlock,
   kleinWorkflow,
@@ -39,8 +40,11 @@ const ADD: { kind: NodeKind; label: string }[] = [
   { kind: "lora", label: "LoRA" },
   { kind: "textEncoder", label: "Text encoder" },
   { kind: "vae", label: "VAE" },
+  { kind: "image", label: "Image" },
   { kind: "prompt", label: "Prompt" },
+  { kind: "enhance", label: "Prompt enhancer" },
   { kind: "sampler", label: "Sampler" },
+  { kind: "preview", label: "Preview" },
   { kind: "save", label: "Save" },
 ];
 
@@ -124,7 +128,7 @@ export function Studio() {
       status: compiled.ok && !blocked ? "staged" : "error",
       summary: compiled.summary,
       chain: compiled.chain,
-      promptJson: JSON.stringify(compiled.prompt, null, 2),
+      promptJson: JSON.stringify(redactImages(compiled.prompt), null, 2),
       message: blocked ?? (compiled.ok ? "Checking the local engine…" : compiled.issues.find((issue) => issue.level === "error")?.message ?? "Graph is incomplete"),
     });
     studio.setView("jobs");
@@ -211,6 +215,7 @@ export function Studio() {
                 <MenuAction label="New Wan 2.2" onClick={() => fresh(wanWorkflow())} />
                 <MenuAction label="New LTX 2.5" onClick={() => fresh(ltxWorkflow())} />
                 <MenuAction label="New MiniMax H3" onClick={() => fresh(minimaxWorkflow())} />
+                <MenuAction label="New image edit" onClick={() => fresh(editWorkflow())} />
                 <MenuAction label="New SDXL" onClick={() => fresh(sdxlWorkflow())} />
                 <MenuAction label="Empty graph" onClick={() => { addWorkflow(emptyWorkflow("Untitled")); setMenu(false); }} />
                 <MenuAction label="Delete this graph" onClick={() => { deleteActive(); setMenu(false); }} />
@@ -222,9 +227,19 @@ export function Studio() {
               <Plus className="size-4" />
             </button>
             {addOpen ? (
-              <div className="absolute top-12 right-0 z-20 w-44 rounded-2xl border border-line bg-surface p-1">
+              <div className="absolute top-12 right-0 z-20 w-48 rounded-2xl border border-line bg-surface p-1">
                 {ADD.map((item) => (
-                  <button key={item.kind} type="button" className="block w-full rounded-xl px-3 py-2 text-left text-sm" onClick={() => place(item.kind)}>
+                  <button
+                    key={item.kind}
+                    type="button"
+                    draggable
+                    className="block w-full cursor-grab rounded-xl px-3 py-2 text-left text-sm"
+                    onDragStart={(event) => {
+                      event.dataTransfer.setData("text/plain", `node:${item.kind}`);
+                      event.dataTransfer.effectAllowed = "copy";
+                    }}
+                    onClick={() => place(item.kind)}
+                  >
                     {item.label}
                   </button>
                 ))}
@@ -354,4 +369,15 @@ function MenuAction({ label, onClick }: { label: string; onClick: () => void }) 
       {label}
     </button>
   );
+}
+
+function redactImages<T>(prompt: T): T {
+  const copy = structuredClone(prompt) as Record<string, { inputs?: Record<string, unknown> }>;
+  for (const node of Object.values(copy)) {
+    if (!node?.inputs) continue;
+    for (const [key, value] of Object.entries(node.inputs)) {
+      if (typeof value === "string" && value.startsWith("data:image")) node.inputs[key] = `[image ${Math.round(value.length / 1024)} KB]`;
+    }
+  }
+  return copy as T;
 }

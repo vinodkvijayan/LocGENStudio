@@ -44,6 +44,9 @@ class Latent:
     frames: int = 1
     images: list[Any] | None = None
     request: dict | None = None
+    init: Any = None
+    mask: Any = None
+    edit_mode: str = "generate"
 
 
 def guess_kind(name: str) -> str:
@@ -184,8 +187,22 @@ class KSampler:
             "scheduler": scheduler,
             "denoise": float(denoise),
             "frames": int(latent_image.frames or 1),
+            "init_image": latent_image.init,
+            "mask": latent_image.mask,
+            "edit_mode": latent_image.edit_mode or "generate",
         }
-        return (Latent(width=latent_image.width, height=latent_image.height, batch=latent_image.batch, frames=latent_image.frames, request=request),)
+        return (
+            Latent(
+                width=latent_image.width,
+                height=latent_image.height,
+                batch=latent_image.batch,
+                frames=latent_image.frames,
+                request=request,
+                init=latent_image.init,
+                mask=latent_image.mask,
+                edit_mode=latent_image.edit_mode,
+            ),
+        )
 
 
 class VAEDecode:
@@ -207,6 +224,122 @@ class SaveImage:
         return (save_png(images, filename_prefix, output_dir()),)
 
 
+def _decode_image(data: str, mode: str = "RGB"):
+    import base64
+    import io
+
+    from PIL import Image
+
+    if not data:
+        raise RuntimeError("The image node is empty.")
+    raw = data.split(",", 1)[1] if data.startswith("data:") and "," in data else data
+    try:
+        blob = base64.b64decode(raw)
+    except Exception as exc:
+        raise RuntimeError("The image data is not base64.") from exc
+    return Image.open(io.BytesIO(blob)).convert(mode)
+
+
+class LoadImage:
+    def run(self, image: str):
+        return (_decode_image(image),)
+
+
+class ImagePadForOutpaint:
+    def run(self, image: Any, left: int = 0, right: int = 0, top: int = 0, bottom: int = 0, feathering: int = 32):
+        from PIL import Image, ImageFilter
+
+        picture = image.convert("RGB")
+        left, right, top, bottom = [max(0, int(value)) for value in (left, right, top, bottom)]
+        width, height = picture.size
+        canvas = Image.new("RGB", (width + left + right, height + top + bottom), (127, 127, 127))
+        canvas.paste(picture, (left, top))
+        mask = Image.new("L", canvas.size, 255)
+        mask.paste(Image.new("L", (width, height), 0), (left, top))
+        if feathering:
+            mask = mask.filter(ImageFilter.GaussianBlur(radius=max(0.5, int(feathering) / 8)))
+        return (canvas, mask)
+
+
+class VAEEncode:
+    def run(self, pixels: Any, vae: VaeRef):
+        del vae
+        width, height = pixels.size
+        return (Latent(width=int(width), height=int(height), init=pixels.convert("RGB"), edit_mode="edit"),)
+
+
+class VAEEncodeForInpaint:
+    def run(self, pixels: Any, mask: Any, vae: VaeRef):
+        del vae
+        picture = pixels.convert("RGB")
+        painted = mask.convert("L") if hasattr(mask, "convert") else _decode_image(str(mask), "L")
+        if painted.size != picture.size:
+            painted = painted.resize(picture.size)
+        return (Latent(width=picture.size[0], height=picture.size[1], init=picture, mask=painted, edit_mode="inpaint"),)
+
+
+class PromptEnhancer:
+    def run(
+        self,
+        prompt: str,
+        model: str,
+        system: str = "",
+        base_url: str = "http://127.0.0.1:11434/v1",
+        temperature: float = 0.4,
+        image: str = "",
+    ):
+        if not str(model).strip():
+            raise RuntimeError("Name the LLM model. Ollama uses the tag from ollama list. LM Studio uses the id it serves.")
+        text = _complete(base_url, model, system, prompt, float(temperature), image or "")
+        return (text,)
+
+
+def _complete(base_url: str, model: str, system: str, prompt: str, temperature: float, image: str) -> str:
+    import json
+    import urllib.error
+    import urllib.request
+
+    root = str(base_url).rstrip("/")
+    if not root.startswith(("http://127.0.0.1", "http://localhost")):
+        raise RuntimeError("The prompt enhancer only calls a server on this PC.")
+    user: Any = prompt
+    if image:
+        user = [
+            {"type": "text", "text": prompt},
+            {"type": "image_url", "image_url": {"url": image if image.startswith("data:") else image}},
+        ]
+    body = {
+        "model": model,
+        "temperature": temperature,
+        "messages": [
+            {"role": "system", "content": system or "Rewrite the image prompt. Return only the prompt."},
+            {"role": "user", "content": user},
+        ],
+    }
+    request = urllib.request.Request(
+        root + "/chat/completions",
+        data=json.dumps(body).encode(),
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=180) as response:
+            payload = json.load(response)
+    except urllib.error.URLError as exc:
+        raise RuntimeError(f"The LLM server at {root} did not answer. Start Ollama or LM Studio, then run again. {exc.reason}") from exc
+    choices = payload.get("choices") or []
+    if not choices:
+        raise RuntimeError("The LLM server returned no text.")
+    message = choices[0].get("message") or {}
+    content = message.get("content") or ""
+    if isinstance(content, list):
+        content = "".join(part.get("text", "") for part in content if isinstance(part, dict))
+    text = str(content).strip()
+    if not text:
+        raise RuntimeError("The LLM server returned an empty prompt.")
+    return text
+
+
 NODE_CLASS_MAPPINGS = {
     "UNETLoader": UNETLoader,
     "CheckpointLoaderSimple": CheckpointLoaderSimple,
@@ -223,4 +356,9 @@ NODE_CLASS_MAPPINGS = {
     "KSampler": KSampler,
     "VAEDecode": VAEDecode,
     "SaveImage": SaveImage,
+    "LoadImage": LoadImage,
+    "ImagePadForOutpaint": ImagePadForOutpaint,
+    "VAEEncode": VAEEncode,
+    "VAEEncodeForInpaint": VAEEncodeForInpaint,
+    "PromptEnhancer": PromptEnhancer,
 }

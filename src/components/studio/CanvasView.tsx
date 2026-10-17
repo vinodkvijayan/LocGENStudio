@@ -1,14 +1,22 @@
 import { useEffect, useMemo, useRef, useState, type DragEvent, type PointerEvent, type ReactNode } from "react";
 import { Copy, Maximize2, Minus, Plus, X } from "lucide-react";
 import { compile } from "@/lib/studio/compile";
+import { readStudioImage } from "@/lib/studio/image";
 import {
+  EDIT_MODES,
+  LLM_ENDPOINTS,
+  SAMPLERS,
+  SCHEDULERS,
   kindLabel,
+  modelsForKind,
   nodeSize,
   nodeSubtitle,
   nodeTitle,
   portLocalY,
   portPosition,
   portsFor,
+  type EditMode,
+  type NodeKind,
   type PortKind,
 } from "@/lib/studio/model";
 import { useActive, useStudio } from "@/lib/studio/store";
@@ -24,13 +32,13 @@ type Draft = {
 };
 
 function stroke(kind: PortKind): string {
-  if (kind === "model" || kind === "cond") return "var(--color-signal)";
+  if (kind === "model" || kind === "cond" || kind === "text") return "var(--color-signal)";
   if (kind === "vae") return "var(--color-muted)";
   return "var(--color-fg)";
 }
 
 function portClass(kind: PortKind): string {
-  if (kind === "model" || kind === "cond") return "bg-signal";
+  if (kind === "model" || kind === "cond" || kind === "text") return "bg-signal";
   if (kind === "vae") return "bg-muted";
   return "bg-fg";
 }
@@ -40,6 +48,7 @@ export function CanvasView() {
   const models = useStudio((s) => s.models);
   const select = useStudio((s) => s.select);
   const moveNode = useStudio((s) => s.moveNode);
+  const patchNode = useStudio((s) => s.patchNode);
   const setPanZoom = useStudio((s) => s.setPanZoom);
   const connect = useStudio((s) => s.connect);
   const setViewport = useStudio((s) => s.setViewport);
@@ -53,6 +62,8 @@ export function CanvasView() {
   const [draft, setDraft] = useState<Draft | null>(null);
   const [graphOpen, setGraphOpen] = useState(false);
   const [copied, setCopied] = useState(false);
+  const [previewOpen, setPreviewOpen] = useState(false);
+  const jobs = useStudio((s) => s.jobs);
 
   const compiled = useMemo(() => compile(workflow, models), [workflow, models]);
   const errors = compiled.issues.filter((i) => i.level === "error");
@@ -138,6 +149,11 @@ export function CanvasView() {
   function onPointerDown(event: PointerEvent<HTMLDivElement>) {
     if (event.button !== 0) return;
     const target = event.target as HTMLElement;
+    if (target.closest("[data-nodrag]")) {
+      const held = target.closest("[data-node]");
+      if (held) select(held.getAttribute("data-node"));
+      return;
+    }
     const port = target.closest("[data-port]");
     if (port) {
       const raw = port.getAttribute("data-port") ?? "";
@@ -200,12 +216,30 @@ export function CanvasView() {
   }
 
   function onDrop(event: DragEvent<HTMLDivElement>) {
-    const id = event.dataTransfer.getData("text/plain");
-    if (!id.startsWith("model:")) return;
     event.preventDefault();
-    const model = models.find((m) => m.id === id.slice(6));
-    if (!model) return;
     const world = toWorld(event.clientX, event.clientY);
+    const file = [...event.dataTransfer.files].find((item) => item.type.startsWith("image/"));
+    if (file) {
+      void readStudioImage(file).then((image) => {
+        const id = useStudio.getState().addKind("image", world.x - 90, world.y - 70);
+        useStudio.getState().patchNode(id, {
+          imageName: image.name,
+          imageData: image.data,
+          imageWidth: image.width,
+          imageHeight: image.height,
+        });
+      });
+      return;
+    }
+    const payload = event.dataTransfer.getData("text/plain");
+    if (payload.startsWith("node:")) {
+      const kind = payload.slice(5) as NodeKind;
+      useStudio.getState().addKind(kind, world.x - 90, world.y - 50);
+      return;
+    }
+    if (!payload.startsWith("model:")) return;
+    const model = models.find((m) => m.id === payload.slice(6));
+    if (!model) return;
     useStudio.getState().addModelNode(model, world.x - 80, world.y - 40);
   }
 
@@ -232,6 +266,25 @@ export function CanvasView() {
     setPanZoom({ x: cx - wx * next, y: cy - wy * next }, next);
   }
 
+  function pictureFor(nodeId: string): string | null {
+    const edge = workflow.edges.find((item) => item.toNode === nodeId && item.toPort === "image");
+    if (!edge) return null;
+    const src = workflow.nodes.find((item) => item.id === edge.fromNode);
+    if (!src) return null;
+    if (src.kind === "image") return src.data.imageData ?? null;
+    if (src.kind === "sampler") {
+      return jobs.find((job) => job.workflowName === workflow.name && job.imageUrl)?.imageUrl ?? null;
+    }
+    return null;
+  }
+
+  const selected = workflow.nodes.find((node) => node.id === workflow.selectedId);
+  const previewSrc =
+    (selected?.kind === "image" ? selected.data.imageData : null) ||
+    (selected?.kind === "preview" ? pictureFor(selected.id) : null) ||
+    jobs.find((job) => job.workflowName === workflow.name && job.imageUrl)?.imageUrl ||
+    null;
+
   return (
     <div className="relative h-full min-h-0">
       <div
@@ -241,7 +294,7 @@ export function CanvasView() {
         onPointerMove={onPointerMove}
         onPointerUp={onPointerUp}
         onDragOver={(event) => {
-          if ([...event.dataTransfer.types].includes("text/plain")) event.preventDefault();
+          if (event.dataTransfer.types.length) event.preventDefault();
         }}
         onDrop={onDrop}
       >
@@ -271,13 +324,15 @@ export function CanvasView() {
             const selected = workflow.selectedId === node.id;
             const title = nodeTitle(node, models);
             const sub = nodeSubtitle(node, models);
-            const missing = node.kind !== "prompt" && node.kind !== "sampler" && node.kind !== "save" && title === "Choose a file";
+            const fileNode = node.kind === "diffusion" || node.kind === "lora" || node.kind === "textEncoder" || node.kind === "vae";
+            const missing = fileNode && !node.data.modelId;
+            const picture = pictureFor(node.id);
             return (
               <article
                 key={node.id}
                 data-node={node.id}
                 data-selected={selected}
-                className="studio-node absolute rounded-2xl border border-line bg-surface"
+                className="studio-node absolute cursor-grab rounded-2xl border border-line bg-surface active:cursor-grabbing"
                 style={{ left: node.x, top: node.y, width: size.w, height: size.h }}
               >
                 {io.inputs.map((port, index) => (
@@ -304,10 +359,101 @@ export function CanvasView() {
                     <span className={`size-3.5 rounded-full ring-2 ring-bg ${portClass(port.kind)}`} />
                   </button>
                 ))}
-                <div className="flex h-full flex-col overflow-hidden px-3.5 py-3">
-                  <p className="text-xs tracking-widest text-muted uppercase">{kindLabel(node.kind)}</p>
-                  <h3 className={`mt-1 truncate text-sm font-medium ${missing ? "text-signal" : "text-fg"}`}>{title}</h3>
-                  <p className={`mt-1 text-xs leading-snug text-muted ${node.kind === "prompt" ? "line-clamp-4" : "line-clamp-3"}`}>{sub}</p>
+                <div className="flex h-full flex-col overflow-hidden px-3 py-2.5">
+                  <p className="text-[10px] tracking-widest text-muted uppercase">{kindLabel(node.kind)}</p>
+                  {fileNode ? (
+                    <NodeSelect
+                      label="Weight"
+                      value={node.data.modelId ?? ""}
+                      onChange={(value) => patchNode(node.id, { modelId: value || undefined })}
+                    >
+                      <option value="">Choose a file</option>
+                      {modelsForKind(models, node.kind).map((model) => (
+                        <option key={model.id} value={model.id}>
+                          {model.name}
+                        </option>
+                      ))}
+                    </NodeSelect>
+                  ) : (
+                    <h3 className={`mt-1 truncate text-sm font-medium ${missing ? "text-signal" : "text-fg"}`}>{title}</h3>
+                  )}
+                  {node.kind === "sampler" ? (
+                    <>
+                      <NodeSelect
+                        label="Mode"
+                        value={node.data.editMode ?? "generate"}
+                        onChange={(value) => patchNode(node.id, { editMode: value as EditMode, denoise: value === "generate" ? 1 : (node.data.denoise ?? 0.55) })}
+                      >
+                        {EDIT_MODES.map((item) => (
+                          <option key={item.id} value={item.id}>
+                            {item.label}
+                          </option>
+                        ))}
+                      </NodeSelect>
+                      <div className="mt-1 grid grid-cols-2 gap-1">
+                        <NodeSelect label="Sampler" value={node.data.sampler ?? "euler"} onChange={(value) => patchNode(node.id, { sampler: value })}>
+                          {SAMPLERS.map((name) => (
+                            <option key={name}>{name}</option>
+                          ))}
+                        </NodeSelect>
+                        <NodeSelect label="Schedule" value={node.data.scheduler ?? "simple"} onChange={(value) => patchNode(node.id, { scheduler: value })}>
+                          {SCHEDULERS.map((name) => (
+                            <option key={name}>{name}</option>
+                          ))}
+                        </NodeSelect>
+                      </div>
+                    </>
+                  ) : null}
+                  {node.kind === "enhance" ? (
+                    <>
+                      <NodeSelect
+                        label="Server"
+                        value={node.data.endpoint ?? LLM_ENDPOINTS[0].url}
+                        onChange={(value) => patchNode(node.id, { endpoint: value })}
+                      >
+                        {LLM_ENDPOINTS.map((item) => (
+                          <option key={item.url} value={item.url}>
+                            {item.label}
+                          </option>
+                        ))}
+                      </NodeSelect>
+                      <label data-nodrag className="mt-1 block text-[10px] text-muted" onPointerDown={(event) => event.stopPropagation()}>
+                        LLM model
+                        <input
+                          className="node-select mt-0.5"
+                          value={node.data.llm ?? ""}
+                          placeholder="llama3.1 or model id"
+                          onChange={(event) => patchNode(node.id, { llm: event.target.value })}
+                        />
+                      </label>
+                    </>
+                  ) : null}
+                  {node.kind === "image" ? (
+                    <ImageWell
+                      src={node.data.imageData}
+                      onFile={(file) => {
+                        void readStudioImage(file).then((image) =>
+                          patchNode(node.id, {
+                            imageName: image.name,
+                            imageData: image.data,
+                            imageWidth: image.width,
+                            imageHeight: image.height,
+                            maskData: undefined,
+                          }),
+                        );
+                      }}
+                    />
+                  ) : null}
+                  {node.kind === "preview" ? (
+                    picture ? (
+                      <img src={picture} alt="" className="mt-2 min-h-0 flex-1 rounded-lg object-contain" />
+                    ) : (
+                      <p className="mt-2 text-xs text-muted">Wire an image, or run the graph and wire the sampler here.</p>
+                    )
+                  ) : null}
+                  {node.kind !== "preview" && node.kind !== "image" ? (
+                    <p className={`mt-1 text-xs leading-snug text-muted ${node.kind === "prompt" ? "line-clamp-3" : "line-clamp-2"}`}>{sub}</p>
+                  ) : null}
                 </div>
               </article>
             );
@@ -320,6 +466,13 @@ export function CanvasView() {
           <p className="text-xs tracking-widest text-muted uppercase">{compiled.ok ? "Graph ready" : "Needs wiring"}</p>
           <p className="mt-1 line-clamp-2 text-sm text-fg">{compiled.ok ? compiled.summary : errors[0]?.message}</p>
         </div>
+        <button
+          type="button"
+          onClick={() => setPreviewOpen(true)}
+          className="pointer-events-auto h-10 shrink-0 rounded-full border border-line bg-surface px-3 text-sm text-fg"
+        >
+          Preview
+        </button>
         <button
           type="button"
           onClick={() => setGraphOpen((v) => !v)}
@@ -343,8 +496,20 @@ export function CanvasView() {
       </div>
 
       <p className="pointer-events-none absolute bottom-5 left-4 hidden text-xs text-muted xl:block">
-        Drag a port to connect · Delete removes the selected card
+        Drag a card to move it · Drag a node from + onto the canvas · Drop a picture to load it
       </p>
+
+      {previewOpen ? (
+        <div className="absolute inset-0 z-30 flex items-center justify-center bg-black/75 p-6" onClick={() => setPreviewOpen(false)}>
+          <div className="max-h-full max-w-full" onClick={(event) => event.stopPropagation()}>
+            {previewSrc ? (
+              <img src={previewSrc} alt="Preview" className="max-h-[80vh] max-w-full rounded-2xl object-contain" />
+            ) : (
+              <p className="rounded-2xl bg-surface px-6 py-5 text-sm text-muted">Load an image, or run a graph. The picture opens here.</p>
+            )}
+          </div>
+        </div>
+      ) : null}
 
       {graphOpen ? (
         <aside className="absolute inset-y-0 right-0 z-10 flex w-full max-w-md flex-col border-l border-line bg-surface">
@@ -371,7 +536,7 @@ export function CanvasView() {
             ))}
           </ul>
           <pre className="mx-4 mb-4 min-h-0 flex-1 overflow-auto rounded-xl bg-bg p-3 text-xs leading-relaxed text-fg">
-            {JSON.stringify(compiled.prompt, null, 2)}
+            {JSON.stringify(redactPrompt(compiled.prompt), null, 2)}
           </pre>
         </aside>
       ) : null}
@@ -390,5 +555,58 @@ function IconButton({ label, onClick, children }: { label: string; onClick: () =
     <button type="button" aria-label={label} onClick={onClick} className="flex size-10 items-center justify-center rounded-full text-fg">
       {children}
     </button>
+  );
+}
+
+function redactPrompt(prompt: Record<string, { class_type: string; inputs: Record<string, unknown> }>) {
+  const copy = structuredClone(prompt);
+  for (const node of Object.values(copy)) {
+    for (const [key, value] of Object.entries(node.inputs)) {
+      if (typeof value === "string" && value.startsWith("data:image")) node.inputs[key] = `[image ${Math.round(value.length / 1024)} KB]`;
+    }
+  }
+  return copy;
+}
+
+function NodeSelect({
+  label,
+  value,
+  onChange,
+  children,
+}: {
+  label: string;
+  value: string;
+  onChange: (value: string) => void;
+  children: ReactNode;
+}) {
+  return (
+    <label data-nodrag className="mt-1 block text-[10px] tracking-wide text-muted uppercase" onPointerDown={(event) => event.stopPropagation()}>
+      {label}
+      <select className="node-select mt-0.5 normal-case" value={value} onChange={(event) => onChange(event.target.value)}>
+        {children}
+      </select>
+    </label>
+  );
+}
+
+function ImageWell({ src, onFile }: { src?: string; onFile: (file: File) => void }) {
+  return (
+    <label data-nodrag className="mt-1 flex min-h-0 flex-1 cursor-pointer flex-col" onPointerDown={(event) => event.stopPropagation()}>
+      {src ? (
+        <img src={src} alt="" className="h-24 w-full rounded-lg object-cover" />
+      ) : (
+        <span className="flex h-20 items-center justify-center rounded-lg border border-dashed border-line text-xs text-muted">Drop or choose</span>
+      )}
+      <input
+        type="file"
+        accept="image/*"
+        className="sr-only"
+        onChange={(event) => {
+          const file = event.target.files?.[0];
+          if (file) onFile(file);
+          event.target.value = "";
+        }}
+      />
+    </label>
   );
 }

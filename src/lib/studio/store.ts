@@ -230,8 +230,23 @@ export function loadSnapshot(): Partial<Snapshot> | null {
 }
 
 export function saveSnapshot(state: StudioState) {
-  const body = JSON.stringify({ v: 1, ...snapshot(state) });
-  localStorage.setItem(STORAGE_KEY, body);
+  try {
+    let body = JSON.stringify({ v: 1, ...snapshot(state) });
+    if (body.length > 4_500_000) {
+      const slim = snapshot(state);
+      slim.workflows = slim.workflows.map((workflow) => ({
+        ...workflow,
+        nodes: workflow.nodes.map((node) => ({
+          ...node,
+          data: { ...node.data, imageData: undefined, maskData: undefined },
+        })),
+      }));
+      body = JSON.stringify({ v: 1, ...slim });
+    }
+    localStorage.setItem(STORAGE_KEY, body);
+  } catch {
+    /* The browser refused the write. The graph still runs in this tab. */
+  }
 }
 
 export function useActive(): Workflow {

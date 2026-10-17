@@ -32,6 +32,18 @@ export async function probeEngine(url: string): Promise<Probe> {
   }
 }
 
+export async function listLlmModels(engineUrl: string, base: string): Promise<string[]> {
+  const root = engineUrl.replace(/\/$/, "");
+  try {
+    const res = await fetch(`${root}/llm/models?base=${encodeURIComponent(base)}`);
+    if (!res.ok) return [];
+    const data = (await res.json()) as { models?: string[] };
+    return Array.isArray(data.models) ? data.models : [];
+  } catch {
+    return [];
+  }
+}
+
 export async function queuePrompt(url: string, prompt: Record<string, ComfyNode>): Promise<string> {
   const base = url.replace(/\/$/, "");
   const res = await fetch(`${base}/prompt`, {

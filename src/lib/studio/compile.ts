@@ -4,6 +4,7 @@ import {
   type GraphNode,
   type ModelFile,
   type Workflow,
+  ENHANCE_SYSTEM,
   familyLabel,
   findModel,
   folderById,
@@ -212,6 +213,34 @@ export function compile(workflow: Workflow, models: ModelFile[]): CompileResult 
     issues.push({ level: "warn", message: "No negative prompt. An empty one will be encoded." });
   }
 
+  const mode = sampler.data.editMode ?? "generate";
+  const sourceEdge = incoming(workflow.edges, sampler.id, "image")[0];
+  const sourceImage = sourceEdge ? byId(workflow.nodes, sourceEdge.fromNode) : undefined;
+  if (mode !== "generate") {
+    if (!sourceImage || sourceImage.kind !== "image") {
+      issues.push({ level: "error", message: "Connect an image card to the sampler for edit, inpaint, or outpaint." });
+    } else if (!sourceImage.data.imageData) {
+      issues.push({ level: "error", message: "Load a picture on the image card. Drop a file on the canvas or choose one." });
+    } else if (mode === "inpaint" && !sourceImage.data.maskData) {
+      issues.push({ level: "error", message: "Paint a mask on the image. That is the area the model will change." });
+    }
+  }
+  for (const promptNode of [positive, negative]) {
+    if (!promptNode || promptNode.kind !== "prompt") continue;
+    const textEdge = incoming(workflow.edges, promptNode.id, "text")[0];
+    if (!textEdge) continue;
+    const src = byId(workflow.nodes, textEdge.fromNode);
+    if (!src || src.kind !== "enhance") {
+      issues.push({ level: "error", message: "The enhanced port only accepts a prompt enhancer." });
+      continue;
+    }
+    if (!(src.data.llm ?? "").trim()) {
+      issues.push({ level: "error", message: "The prompt enhancer needs an LLM model name." });
+    }
+    const sourcePrompt = (src.data.text ?? "").trim() || (promptNode.data.text ?? "").trim();
+    if (!sourcePrompt) issues.push({ level: "error", message: "The prompt enhancer needs a prompt to rewrite." });
+  }
+
   if (issues.some((i) => i.level === "error") || !weight || !positive) {
     return finish(issues, prompt, chain, blockedSummary(workflow, models));
   }
@@ -306,7 +335,7 @@ export function compile(workflow: Workflow, models: ModelFile[]): CompileResult 
     return finish(issues, prompt, chain, blockedSummary(workflow, models));
   }
 
-  const posText = positive.data.text ?? "";
+  const posText = textInput(positive, "");
   const posId = add("CLIPTextEncode", { text: posText, clip: clipRef });
   let positiveRef: Ref = [posId, 0];
   const guidance = sampler.data.cfg ?? 1;
@@ -316,7 +345,7 @@ export function compile(workflow: Workflow, models: ModelFile[]): CompileResult 
     positiveRef = [gId, 0];
   }
 
-  const negText = negative && negative.kind === "prompt" ? (negative.data.text ?? "") : "";
+  const negText = negative && negative.kind === "prompt" ? textInput(negative, "") : "";
   const negId = add("CLIPTextEncode", { text: negText, clip: clipRef });
   const negativeRef: Ref = [negId, 0];
 
@@ -326,7 +355,25 @@ export function compile(workflow: Workflow, models: ModelFile[]): CompileResult 
   const video = VIDEO_FAMILIES.includes(family);
   const frames = Math.max(1, Math.round(sampler.data.frames ?? (video ? 49 : 1)));
   let latentId: string;
-  if (family === "ltxv") {
+  if (mode !== "generate" && sourceImage?.data.imageData) {
+    const loadId = add("LoadImage", { image: sourceImage.data.imageData });
+    if (mode === "outpaint") {
+      const padId = add("ImagePadForOutpaint", {
+        image: [loadId, 0],
+        left: Math.max(0, Math.round(sampler.data.padLeft ?? 128)),
+        right: Math.max(0, Math.round(sampler.data.padRight ?? 128)),
+        top: Math.max(0, Math.round(sampler.data.padTop ?? 128)),
+        bottom: Math.max(0, Math.round(sampler.data.padBottom ?? 128)),
+        feathering: 32,
+      });
+      latentId = add("VAEEncodeForInpaint", { pixels: [padId, 0], mask: [padId, 1], vae: vaeRef });
+    } else if (mode === "inpaint") {
+      const maskId = add("LoadImage", { image: sourceImage.data.maskData ?? "" });
+      latentId = add("VAEEncodeForInpaint", { pixels: [loadId, 0], mask: [maskId, 0], vae: vaeRef });
+    } else {
+      latentId = add("VAEEncode", { pixels: [loadId, 0], vae: vaeRef });
+    }
+  } else if (family === "ltxv") {
     latentId = add("EmptyLTXVLatentVideo", { width, height, length: frames, batch_size: batch });
   } else if (video) {
     latentId = add("EmptyHunyuanLatentVideo", { width, height, length: frames, batch_size: batch });
@@ -349,7 +396,10 @@ export function compile(workflow: Workflow, models: ModelFile[]): CompileResult 
   });
 
   const decId = add("VAEDecode", { samples: [kId, 0], vae: vaeRef });
-  const saveEdge = workflow.edges.find((e) => e.fromNode === sampler.id && e.fromPort === "image");
+  const saveEdge = workflow.edges.find((e) => {
+    if (e.fromNode !== sampler.id || e.fromPort !== "image") return false;
+    return byId(workflow.nodes, e.toNode)?.kind === "save";
+  });
   const save = saveEdge ? byId(workflow.nodes, saveEdge.toNode) : undefined;
   const prefix = save && save.kind === "save" ? save.data.prefix || "locgen" : "locgen";
   if (!save) issues.push({ level: "warn", message: "No save node. Prefix defaults to locgen." });
@@ -364,12 +414,34 @@ export function compile(workflow: Workflow, models: ModelFile[]): CompileResult 
     loraNames.length ? `LoRA ${loraNames.join(" → ")}` : null,
     `${sampler.data.steps ?? 20} steps`,
     fluxLike && guidance > 1 ? `guidance ${guidance}` : `cfg ${guidance}`,
-    video ? `${width}×${height} · ${frames} frames` : `${width}×${height}`,
+    video ? `${width}×${height} · ${frames} frames` : mode === "generate" ? `${width}×${height}` : mode,
   ]
     .filter(Boolean)
     .join(" · ");
 
   return finish(issues, prompt, chain, summary);
+
+  function textInput(promptNode: GraphNode, fallback: string): string | Ref {
+    const link = incoming(workflow.edges, promptNode.id, "text")[0];
+    if (!link) return promptNode.data.text ?? fallback;
+    const src = byId(workflow.nodes, link.fromNode);
+    if (!src || src.kind !== "enhance") return promptNode.data.text ?? fallback;
+    let image = "";
+    const imageLink = incoming(workflow.edges, src.id, "image")[0];
+    if (imageLink) {
+      const picture = byId(workflow.nodes, imageLink.fromNode);
+      if (picture?.kind === "image") image = picture.data.imageData ?? "";
+    }
+    const id = add("PromptEnhancer", {
+      system: src.data.system || ENHANCE_SYSTEM,
+      prompt: (src.data.text ?? "").trim() || (promptNode.data.text ?? "").trim(),
+      model: (src.data.llm ?? "").trim(),
+      base_url: (src.data.endpoint || "http://127.0.0.1:11434/v1").replace(/\/$/, ""),
+      temperature: src.data.temperature ?? 0.4,
+      image,
+    });
+    return [id, 0];
+  }
 }
 
 function blockedSummary(workflow: Workflow, models: ModelFile[]): string {
