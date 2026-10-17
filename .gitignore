@@ -2,7 +2,7 @@ node_modules/
 .grok/
 .vercel/
 dist/
-screenshots/
+/screenshots/
 artifacts/
 **/__pycache__/
 *.pyc

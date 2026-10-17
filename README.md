@@ -4,6 +4,18 @@ LocGENStudio is a local generative studio for Windows 11. The canvas is a graph.
 
 Nothing in a run is uploaded. The preview in a browser cannot see your GPU. Real images appear only after the starter is listening on this machine.
 
+## Screenshots
+
+The canvas is a wired graph. Run posts that graph to the engine on this PC.
+
+![Flux portrait graph](docs/screenshots/canvas.png)
+
+![Built-in graphs, including Krea 2, Qwen Image 2.1, Z-Image, Wan 2.2, LTX 2.5, and MiniMax H3](docs/screenshots/graphs.png)
+
+![Krea 2 graph](docs/screenshots/krea.png)
+
+![Windows setup](docs/screenshots/windows.png)
+
 ## Layout
 
 ```
