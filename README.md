@@ -1,12 +1,28 @@
 # LocGENStudio
 
-**0.9.0.** A local generative studio for Windows 11.
+**0.10.0.** A local generative studio for Windows 11.
 
 You wire a graph on the canvas. The engine on this PC loads the weights you already have and samples on the GPU that `pythonembedded` can see. Diffusion models, LoRAs, text encoders, VAEs, and checkpoints stay in one models folder, in the same layout a local engine expects. The studio sends filenames and sampler settings. It does not upload the files. A browser preview cannot see the GPU. A real image shows up only after the starter is listening on this machine.
 
 Built-in graphs cover Flux, Flux Schnell, Flux 2 Klein, Krea 2, Qwen Image 2.1, Z-Image, SDXL, SD 1.5, Wan 2.2, LTX 2.5, and MiniMax H3. Open **Graphs** and start from one of those instead of wiring the loaders by hand.
 
-The Windows package for this version is [v0.9.0](https://github.com/vinodkvijayan/LocGENStudio/releases/tag/v0.9.0).
+The Windows package for this version is [v0.10.0](https://github.com/vinodkvijayan/LocGENStudio/releases/tag/v0.10.0). `LocGENStudio.exe` is the whole app: the studio, the engine, and — once packed — Python and the inference libraries. Model weights are the only files it does not contain.
+
+## One exe
+
+Double-click [LocGENStudio.exe](https://github.com/vinodkvijayan/LocGENStudio/releases/tag/v0.10.0). It opens the studio in the browser and listens on `http://127.0.0.1:8188`. A console window stays open while it runs. Close that window to stop it.
+
+Models are not in the exe. It uses `models` next to the exe if that folder exists, otherwise `C:\LocGENStudio\models`. Output is the `output` folder beside the models root.
+
+The exe on the release contains the studio and the engine. It uses `pythonembedded` next to the exe, or `C:\LocGENStudio\pythonembedded`, if you already have one. To put Python, PyTorch and diffusers **inside** the exe so a second machine only needs the models:
+
+```
+powershell -ExecutionPolicy Bypass -File .\Build-LocGENStudioExe.ps1
+```
+
+That script downloads embeddable Python and the CUDA 12.8 PyTorch wheel when `pythonembedded` is missing, then writes a new `LocGENStudio.exe`. The result is several gigabytes. GitHub cannot host a file that size, so the packed exe stays on the machine that built it. Copy that exe anywhere. Do not copy the models into it.
+
+An RTX 4060 Ti and an RTX 5060 both run the cu128 wheel. The driver has to be new enough for CUDA 12.8.
 
 ## Screenshots
 

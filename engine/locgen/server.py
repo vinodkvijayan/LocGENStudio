@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import argparse
 import json
+import mimetypes
+import os
 import queue
 import threading
 import time
@@ -24,6 +26,41 @@ from locgen.runtime import embedded_python
 _jobs: dict[str, dict] = {}
 _lock = threading.Lock()
 _pending: queue.Queue[str] = queue.Queue()
+_studio: Path | None = None
+
+
+def studio_root() -> Path | None:
+    global _studio
+    if _studio is not None and (_studio / "index.html").is_file():
+        return _studio
+    env = os.environ.get("LOCGEN_STUDIO", "").strip()
+    candidates = []
+    if env:
+        candidates.append(Path(env))
+    here = Path(__file__).resolve()
+    candidates.append(here.parents[2] / "studio")
+    candidates.append(here.parents[1].parent / "studio")
+    for path in candidates:
+        if (path / "index.html").is_file():
+            return path
+    return None
+
+
+def _mime(path: Path) -> str:
+    guessed, _ = mimetypes.guess_type(path.name)
+    if guessed:
+        return guessed
+    if path.suffix == ".js":
+        return "text/javascript"
+    if path.suffix == ".mjs":
+        return "text/javascript"
+    if path.suffix == ".css":
+        return "text/css"
+    if path.suffix == ".svg":
+        return "image/svg+xml"
+    if path.suffix == ".woff2":
+        return "font/woff2"
+    return "application/octet-stream"
 
 
 def _device_name() -> str:
@@ -171,6 +208,7 @@ class Handler(BaseHTTPRequestHandler):
             base = (parse_qs(parsed.query).get("base") or [""])[0].rstrip("/")
             self._json(200, {"models": _llm_models(base)})
             return
+        if path == "/queue":
             with _lock:
                 running = [[0, pid] for pid, job in _jobs.items() if job.get("state") == "running"]
                 pending = [[0, pid] for pid, job in _jobs.items() if job.get("state") == "pending"]
@@ -204,7 +242,38 @@ class Handler(BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(data)
             return
+        if self._serve_studio(path):
+            return
         self._json(404, {"error": "not found"})
+
+    def _serve_studio(self, path: str) -> bool:
+        root = studio_root()
+        if root is None:
+            return False
+        root = root.resolve()
+        rel = path.lstrip("/") or "index.html"
+        if rel.endswith("/"):
+            rel += "index.html"
+        candidate = (root / rel).resolve()
+        if root != candidate and root not in candidate.parents:
+            return False
+        if candidate.is_dir():
+            candidate = candidate / "index.html"
+        if not candidate.is_file():
+            if "." in Path(rel).name:
+                return False
+            candidate = root / "index.html"
+            if not candidate.is_file():
+                return False
+        data = candidate.read_bytes()
+        self.send_response(200)
+        self._cors()
+        self.send_header("Content-Type", _mime(candidate))
+        self.send_header("Content-Length", str(len(data)))
+        self.send_header("Cache-Control", "no-cache")
+        self.end_headers()
+        self.wfile.write(data)
+        return True
 
     def do_POST(self) -> None:
         parsed = urlparse(self.path)
@@ -242,7 +311,11 @@ def main() -> None:
     parser.add_argument("--output", default="")
     parser.add_argument("--listen", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8188)
+    parser.add_argument("--studio", default="")
     args = parser.parse_args()
+    global _studio
+    if args.studio:
+        _studio = Path(args.studio)
     root = set_models_root(args.models)
     out = set_output_dir(args.output) if args.output else set_output_dir(root.parent / "output")
     thread = threading.Thread(target=_worker, name="locgen-sample", daemon=True)
@@ -252,4 +325,7 @@ def main() -> None:
     print(f"Models:  {root}")
     print(f"Output:  {out}")
     print(f"Listen:  http://{args.listen}:{args.port}")
+    page = studio_root()
+    if page is not None:
+        print(f"Studio:  http://{args.listen}:{args.port}/")
     server.serve_forever()

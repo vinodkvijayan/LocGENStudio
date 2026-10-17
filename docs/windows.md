@@ -1,8 +1,19 @@
 # Windows starter
 
-`Start-LocGENStudio.ps1` is generated in the browser from the model root currently typed on the Windows tab. Download it again if you change that path. The file on disk does not track later edits.
+`LocGENStudio.exe` is the single file. It unpacks the studio and the engine, starts inference on this PC, and opens the browser. `Start-LocGENStudio.ps1` is the older folder layout, still useful if you want to see the engine directory.
 
-## Run it
+## One exe
+
+Put `LocGENStudio.exe` where you want it. Models stay outside:
+
+- `models` next to the exe, or
+- `C:\LocGENStudio\models` if that folder already exists
+
+The release exe does not contain Python. It finds `pythonembedded` next to the exe or at `C:\LocGENStudio\pythonembedded`.
+
+`Build-LocGENStudioExe.ps1` folds that Python folder into a new exe. If the folder is missing, the script downloads embeddable Python 3.12 and installs PyTorch (CUDA 12.8), diffusers, transformers, safetensors, accelerate and pillow. The new exe is several GB. Only the model weights are left for you to download.
+
+## Run the script
 
 ```
 powershell -ExecutionPolicy Bypass -File .\Start-LocGENStudio.ps1 -Root 'C:\LocGENStudio\models' -Port 8188

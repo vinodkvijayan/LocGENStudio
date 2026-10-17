@@ -142,6 +142,8 @@ function authPopupPlugin(): Plugin {
   };
 }
 
+const desktop = process.env.LOCGEN_DESKTOP === "1";
+
 // `0.0.0.0:8080` is the live-preview contract — don't change host/port.
 // The dev server starts once `src/router.tsx` and `src/routes/` exist — see
 // AGENTS.md § "First scaffold".
@@ -157,6 +159,7 @@ export default defineConfig(({ command, isPreview }) => ({
     strictPort: true,
   },
   resolve: { tsconfigPaths: true },
+  ...(desktop ? { build: { sourcemap: false } } : {}),
   plugins: [
     pgliteBootstrapPlugin(),
     // Before tanstackStart so /auth/popup never falls through to the SPA.
@@ -166,9 +169,20 @@ export default defineConfig(({ command, isPreview }) => ({
     // PWA head + ?install=1 tutorial page; runs before Start/Nitro.
     grokPwaPlugin(),
     tailwindcss(),
-    tanstackStart(),
+    tanstackStart(
+      desktop
+        ? {
+            spa: {
+              enabled: true,
+              prerender: { outputPath: "/index.html", crawlLinks: false },
+            },
+          }
+        : {},
+    ),
     ...(command === "build" || isPreview
-      ? [
+      ? desktop
+        ? []
+        : [
           nitro({
             preset: "vercel",
             // Auto-registers server/middleware/* (the PWA install page +
