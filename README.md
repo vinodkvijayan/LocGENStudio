@@ -2,7 +2,7 @@
 
 **0.10.0.** A local generative studio for Windows 11.
 
-You wire a graph on the canvas. The engine on this PC loads the weights you already have and samples on the GPU that `pythonembedded` can see. Diffusion models, LoRAs, text encoders, VAEs, and checkpoints stay in one models folder, in the same layout a local engine expects. The studio sends filenames and sampler settings. It does not upload the files. A browser preview cannot see the GPU. A real image shows up only after the starter is listening on this machine.
+You wire a graph on the canvas. The engine on local PC loads the weights you already have and samples on the GPU that `pythonembedded` can see. Diffusion models, LoRAs, text encoders, VAEs, and checkpoints stay in one models folder, in the same layout a local engine expects. The studio sends filenames and sampler settings. It does not upload the files.
 
 Built-in graphs cover Flux, Flux Schnell, Flux 2 Klein, Krea 2, Qwen Image 2.1, Z-Image, SDXL, SD 1.5, Wan 2.2, LTX 2.5, and MiniMax H3. Open **Graphs** and start from one of those instead of wiring the loaders by hand.
 
